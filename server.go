@@ -16,6 +16,9 @@ type Server struct {
 
 	cmds map[string]interface{}
 	mu   sync.RWMutex
+
+	onNewClientCallback      func(c *Client)
+	onClientConnectionClosed func(c *Client, err error)
 }
 
 // NewServer creates a new server instance
@@ -25,10 +28,20 @@ func NewServer(config *Config) *Server {
 	}
 
 	return &Server{
-		config: config,
-		info:   newServerInfo(),
-		cmds:   make(map[string]interface{}),
+		config:                   config,
+		info:                     newServerInfo(),
+		cmds:                     make(map[string]interface{}),
+		onNewClientCallback:      func(c *Client) {},
+		onClientConnectionClosed: func(c *Client, err error) {},
 	}
+}
+
+func (srv *Server) OnNewClient(callback func(c *Client)) {
+	srv.onNewClientCallback = callback
+}
+
+func (srv *Server) OnClientConnectionClosed(callback func(c *Client, err error)) {
+	srv.onClientConnectionClosed = callback
 }
 
 // Info returns the server info registry
@@ -87,6 +100,8 @@ func (srv *Server) serveClient(c *Client) {
 	srv.info.register(c)
 	defer srv.info.deregister(c.id)
 
+	srv.onNewClientCallback(c)
+
 	// Create perform callback
 	perform := func(name string) error {
 		return srv.perform(c, name)
@@ -105,15 +120,18 @@ func (srv *Server) serveClient(c *Client) {
 
 			if !resp.IsProtocolError(err) {
 				_ = c.wr.Flush()
+				srv.onClientConnectionClosed(c, err)
 				return
 			}
 		}
 
 		// flush buffer, return on errors
 		if err := c.wr.Flush(); err != nil {
+			srv.onClientConnectionClosed(c, err)
 			return
 		}
 	}
+	srv.onClientConnectionClosed(c, nil)
 }
 
 func (srv *Server) perform(c *Client, name string) (err error) {
